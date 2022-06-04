@@ -3,6 +3,7 @@
 import threading
 import rospy
 import actionlib
+from actionlib_msgs.msg import GoalStatus
 from smach import State,StateMachine
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from geometry_msgs.msg import PoseWithCovarianceStamped, PoseArray ,PointStamped
@@ -14,6 +15,7 @@ import rospkg
 import csv
 import time
 from geometry_msgs.msg import PoseStamped
+from follow_waypoints.msg import WaypointsAction, WaypointsResult, WaypointsFeedback
 
 # change Pose to the correct frame 
 def changePose(waypoint,target_frame):
@@ -62,11 +64,17 @@ class FollowPath(State):
     def execute(self, userdata):
         global waypoints
         # Execute waypoints each in sequence
-        for waypoint in waypoints:
+        for i, waypoint in enumerate(waypoints):
             # Break if preempted
             if waypoints == []:
+                fw.send_result(WaypointsResult.RESET)
                 rospy.loginfo('The waypoint queue has been reset.')
-                break
+                return 'success'
+            elif fw._as.is_preempt_requested():
+                self.client.cancel_all_goals()
+                fw.send_result(WaypointsResult.CANCELED)
+                rospy.loginfo('Action Server received cancel request.')
+                return 'success'
             # Otherwise publish next waypoint as goal
             goal = MoveBaseGoal()
             goal.target_pose.header.frame_id = self.frame_id
@@ -83,11 +91,21 @@ class FollowPath(State):
             else:
                 #This is the loop which exist when the robot is near a certain GOAL point.
                 distance = 10
+                start_time = rospy.Time.now()
                 while(distance > self.distance_tolerance):
                     now = rospy.Time.now()
                     self.listener.waitForTransform(self.odom_frame_id, self.base_frame_id, now, rospy.Duration(4.0))
                     trans,rot = self.listener.lookupTransform(self.odom_frame_id,self.base_frame_id, now)
                     distance = math.sqrt(pow(waypoint.pose.pose.position.x-trans[0],2)+pow(waypoint.pose.pose.position.y-trans[1],2))
+                    state = self.client.get_state()
+                    if state == GoalStatus.ABORTED:
+                        fw.send_result(WaypointsResult.FAILED)
+                        return 'success'
+                    elif (now - start_time) > distance * 5.0:
+                        fw.send_result(WaypointsResult.TIMEOUT)
+                        return 'success'
+                    fw.send_feedback("[{}/{}] {}m to next waypoint.".format(i, length(waypoints), distance))
+        fw.send_result(WaypointsResult.SUCCEEDED)
         return 'success'
 
 def convert_PoseWithCovArray_to_PoseArray(waypoints):
@@ -130,6 +148,7 @@ class GetPath(State):
         global waypoints
         self.initialize_path_queue()
         self.path_ready = False
+        fw.path_ready = False
 
         # Start thread to listen for when the path is ready (this function will end then)
         # Also will save the clicked path to pose.csv file
@@ -181,7 +200,7 @@ class GetPath(State):
 
 
         # Wait for published waypoints or saved path  loaded
-        while (not self.path_ready and not self.start_journey_bool):
+        while (not self.path_ready and not self.start_journey_bool and not fw.path_ready):
             try:
                 pose = rospy.wait_for_message(topic, PoseWithCovarianceStamped, timeout=1)
             except rospy.ROSException as e:
@@ -207,9 +226,34 @@ class PathComplete(State):
         rospy.loginfo('###############################')
         return 'success'
 
+class FollowWaypointsAction():
+    _feedback = follow_waypoints.msg.WaypointsFeedback()
+    _result   = follow_waypoints.msg.WaypointsResult()
+
+    def __init__(self):
+        self._action_name = rospy.get_param('~action_name','waypoints_action')
+        self._as = actionlib.SimpleActionServer(self._action_name, follow_waypoints.msg.WaypointsAction, execute_cb=self.execute_cb)
+        self._as.start()
+
+    def execute_cb(self, goal):
+        rospy.loginfo('Recieved path READY action goal')
+        self.path_ready = True
+        with open(output_file_path, 'w') as file:
+            for current_pose in waypoints:
+                file.write(str(current_pose.pose.pose.position.x) + ',' + str(current_pose.pose.pose.position.y) + ',' + str(current_pose.pose.pose.position.z) + ',' + str(current_pose.pose.pose.orientation.x) + ',' + str(current_pose.pose.pose.orientation.y) + ',' + str(current_pose.pose.pose.orientation.z) + ',' + str(current_pose.pose.pose.orientation.w)+ '\n')
+        rospy.loginfo('poses written to '+ output_file_path)
+
+    def send_feedback(self, feedback):
+        self._feedback.text = feedback
+        self._as.publish_feedback(self._feedback)
+
+    def send_result(self, result):
+        self._result.result = result
+        self._as.set_succeeded(self._result)
+
 def main():
     rospy.init_node('follow_waypoints')
-
+    fw = FollowWaypointsAction()
     sm = StateMachine(outcomes=['success'])
 
     with sm:
