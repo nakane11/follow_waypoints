@@ -104,7 +104,7 @@ class FollowPath(State):
                     elif (now - start_time) > distance * 5.0:
                         fw.send_result(WaypointsResult.TIMEOUT)
                         return 'success'
-                    fw.send_feedback("[{}/{}] {}m to next waypoint.".format(i, length(waypoints), distance))
+                    fw.send_feedback("[{}/{}] {}m to next waypoint.".format(i+1, len(waypoints), distance))
         fw.send_result(WaypointsResult.SUCCEEDED)
         return 'success'
 
