@@ -60,6 +60,7 @@ class FollowPath(State):
         self.tf = TransformListener()
         self.listener = tf.TransformListener()
         self.distance_tolerance = rospy.get_param('waypoint_distance_tolerance', 0.0)
+        self.timeout = rospy.get_param('~timeout', 0.0)
 
     def execute(self, userdata):
         global waypoints
@@ -85,23 +86,42 @@ class FollowPath(State):
             rospy.loginfo("To cancel the goal: 'rostopic pub -1 /move_base/cancel actionlib_msgs/GoalID -- {}'")
             self.client.send_goal(goal)
             if not self.distance_tolerance > 0.0:
-                self.client.wait_for_result()
+                if self.timeout > 0:
+                    finished_within_time = self.client.wait_for_result(rospy.Duration(self.timeout))
+                    if not finished_within_time:
+                        self.client.cancel_all_goals()
+                        fw.send_result(WaypointsResult.TIMEOUT)
+                        return 'success'
+                else:
+                    self.client.wait_for_result()
+                state = self.client.get_state()
+                if state == GoalStatus.ABORTED or state == GoalStatus.PREEMPTED:
+                    fw.send_result(WaypointsResult.FAILED)
+                    return 'success'
                 rospy.loginfo("Waiting for %f sec..." % self.duration)
                 time.sleep(self.duration)
             else:
                 #This is the loop which exist when the robot is near a certain GOAL point.
                 distance = 10
                 start_time = rospy.Time.now()
+
+                if self.timeout > 0:
+                    timeout = self.timeout
+                else:
+                    self.listener.waitForTransform(self.odom_frame_id, self.base_frame_id, start_time, rospy.Duration(4.0))
+                    trans,rot = self.listener.lookupTransform(self.odom_frame_id,self.base_frame_id, now)
+                    timeout = max(8.0, 5 * math.sqrt(pow(waypoint.pose.pose.position.x-trans[0],2)+pow(waypoint.pose.pose.position.y-trans[1],2)))
+
                 while(distance > self.distance_tolerance):
                     now = rospy.Time.now()
                     self.listener.waitForTransform(self.odom_frame_id, self.base_frame_id, now, rospy.Duration(4.0))
                     trans,rot = self.listener.lookupTransform(self.odom_frame_id,self.base_frame_id, now)
                     distance = math.sqrt(pow(waypoint.pose.pose.position.x-trans[0],2)+pow(waypoint.pose.pose.position.y-trans[1],2))
                     state = self.client.get_state()
-                    if state == GoalStatus.ABORTED:
+                    if state == GoalStatus.ABORTED or state == GoalStatus.PREEMPTED:
                         fw.send_result(WaypointsResult.FAILED)
                         return 'success'
-                    elif (now - start_time) > distance * 5.0:
+                    elif (now - start_time) > timeout:
                         fw.send_result(WaypointsResult.TIMEOUT)
                         return 'success'
                     fw.send_feedback("[{}/{}] {}m to next waypoint.".format(i+1, len(waypoints), distance))
@@ -249,7 +269,16 @@ class FollowWaypointsAction():
 
     def send_result(self, result):
         self._result.result = result
-        self._as.set_succeeded(self._result)
+        if result == WaypointsResult.RESET:
+            self._as.set_aborted(self._result)
+        elif result == WaypointsResult.CANCELED:
+            self._as.set_preempted(self._result)
+        elif result == WaypointsResult.FAILED:
+            self._as.set_aborted(self._result)
+        elif result == WaypointsResult.TIMEOUT:
+            self._as.set_aborted(self._result)
+        elif result == WaypointsResult.SUCCEEDED:
+            self._as.set_succeeded(self._result)
 
 def main():
     rospy.init_node('follow_waypoints')
