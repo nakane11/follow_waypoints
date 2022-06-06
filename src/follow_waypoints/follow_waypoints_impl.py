@@ -46,6 +46,7 @@ output_file_path = rospkg.RosPack().get_path('follow_waypoints')+"/saved_path/po
 waypoints = []
 
 class FollowPath(State):
+    global fw
     def __init__(self):
         State.__init__(self, outcomes=['success'], input_keys=['waypoints'])
         self.frame_id = rospy.get_param('~goal_frame_id','map')
@@ -137,6 +138,7 @@ def convert_PoseWithCovArray_to_PoseArray(waypoints):
     return poses
 
 class GetPath(State):
+    global fw
     def __init__(self):
         State.__init__(self, outcomes=['success'], input_keys=['waypoints'], output_keys=['waypoints'])
         # Subscribe to pose message to get new waypoints
@@ -282,6 +284,7 @@ class FollowWaypointsAction():
             self._as.set_succeeded(self._result)
 
 def main():
+    global fw
     rospy.init_node('follow_waypoints')
     fw = FollowWaypointsAction()
     sm = StateMachine(outcomes=['success'])
