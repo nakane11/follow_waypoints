@@ -85,7 +85,7 @@ class FollowPath(State):
             goal.target_pose.pose.orientation = waypoint.pose.pose.orientation
             rospy.loginfo('Executing move_base goal to position (x,y): %s, %s' %
                     (waypoint.pose.pose.position.x, waypoint.pose.pose.position.y))
-            rospy.loginfo("To cancel the goal: 'rostopic pub -1 /move_base/cancel actionlib_msgs/GoalID -- {}'")
+            # rospy.loginfo("To cancel the goal: 'rostopic pub -1 /move_base/cancel actionlib_msgs/GoalID -- {}'")
             self.client.send_goal(goal)
             if not self.distance_tolerance > 0.0:
                 if self.timeout > 0:
@@ -102,6 +102,7 @@ class FollowPath(State):
                     return 'success'
                 rospy.loginfo("Waiting for %f sec..." % self.duration)
                 time.sleep(self.duration)
+                fw.send_feedback("Passed {}/{} waypoint.".format(i+1, len(waypoints)))
             else:
                 #This is the loop which exist when the robot is near a certain GOAL point.
                 distance = 10
