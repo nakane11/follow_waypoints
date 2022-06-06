@@ -13,17 +13,24 @@ find_package(catkin REQUIRED COMPONENTS
   message_generation
 )
 
+catkin_python_setup()
+
 add_action_files(
   DIRECTORY action
   FILES
   Waypoints.action
 )
 
-catkin_python_setup()
+generate_messages(
+  DEPENDENCIES
+  std_msgs
+  actionlib_msgs
+)
+
 
 catkin_package(
   LIBRARIES ${PROJECT_NAME}
-  CATKIN_DEPENDS actionlib actionlib_msgs geometry_msgs move_base_msgs rospy smach std_msgs
+  CATKIN_DEPENDS actionlib actionlib_msgs geometry_msgs move_base_msgs rospy smach std_msgs message_runtime
 )
 
 catkin_install_python(
