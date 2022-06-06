@@ -33,7 +33,7 @@ catkin_package(
 )
 
 catkin_install_python(
-  PROGRAMS nodes/follow_waypoints
+  PROGRAMS nodes/follow_waypoints_server
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

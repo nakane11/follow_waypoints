@@ -15,6 +15,7 @@ import rospkg
 import csv
 import time
 from geometry_msgs.msg import PoseStamped
+import follow_waypoints.msg
 from follow_waypoints.msg import WaypointsAction, WaypointsResult, WaypointsFeedback
 
 # change Pose to the correct frame 
