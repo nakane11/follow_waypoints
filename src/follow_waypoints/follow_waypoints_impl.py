@@ -70,12 +70,12 @@ class FollowPath(State):
         for i, waypoint in enumerate(waypoints):
             # Break if preempted
             if waypoints == []:
-                fw.send_result(WaypointsResult.RESET)
+                fw.set_result(WaypointsResult.RESET)
                 rospy.loginfo('The waypoint queue has been reset.')
                 return 'success'
             elif fw._as.is_preempt_requested():
                 self.client.cancel_all_goals()
-                fw.send_result(WaypointsResult.CANCELED)
+                fw.set_result(WaypointsResult.CANCELED)
                 rospy.loginfo('Action Server received cancel request.')
                 return 'success'
             # Otherwise publish next waypoint as goal
@@ -92,13 +92,13 @@ class FollowPath(State):
                     finished_within_time = self.client.wait_for_result(rospy.Duration(self.timeout))
                     if not finished_within_time:
                         self.client.cancel_all_goals()
-                        fw.send_result(WaypointsResult.TIMEOUT)
+                        fw.set_result(WaypointsResult.TIMEOUT)
                         return 'success'
                 else:
                     self.client.wait_for_result()
                 state = self.client.get_state()
                 if state == GoalStatus.ABORTED or state == GoalStatus.PREEMPTED:
-                    fw.send_result(WaypointsResult.FAILED)
+                    fw.set_result(WaypointsResult.FAILED)
                     return 'success'
                 rospy.loginfo("Waiting for %f sec..." % self.duration)
                 time.sleep(self.duration)
@@ -122,13 +122,13 @@ class FollowPath(State):
                     distance = math.sqrt(pow(waypoint.pose.pose.position.x-trans[0],2)+pow(waypoint.pose.pose.position.y-trans[1],2))
                     state = self.client.get_state()
                     if state == GoalStatus.ABORTED or state == GoalStatus.PREEMPTED:
-                        fw.send_result(WaypointsResult.FAILED)
+                        fw.set_result(WaypointsResult.FAILED)
                         return 'success'
                     elif (now - start_time) > timeout:
-                        fw.send_result(WaypointsResult.TIMEOUT)
+                        fw.set_result(WaypointsResult.TIMEOUT)
                         return 'success'
                     fw.send_feedback("[{}/{}] {}m to next waypoint.".format(i+1, len(waypoints), distance))
-        fw.send_result(WaypointsResult.SUCCEEDED)
+        fw.set_result(WaypointsResult.SUCCEEDED)
         return 'success'
 
 def convert_PoseWithCovArray_to_PoseArray(waypoints):
@@ -258,21 +258,18 @@ class FollowWaypointsAction():
         self._action_name = rospy.get_param('~action_name','waypoints_action')
         self._as = actionlib.SimpleActionServer(self._action_name, follow_waypoints.msg.WaypointsAction, execute_cb=self.execute_cb)
         self._as.start()
+        self._result_ready = False
 
     def execute_cb(self, goal):
         rospy.loginfo('Recieved path READY action goal')
+        self._result_ready = False
         self.path_ready = True
         with open(output_file_path, 'w') as file:
             for current_pose in waypoints:
                 file.write(str(current_pose.pose.pose.position.x) + ',' + str(current_pose.pose.pose.position.y) + ',' + str(current_pose.pose.pose.position.z) + ',' + str(current_pose.pose.pose.orientation.x) + ',' + str(current_pose.pose.pose.orientation.y) + ',' + str(current_pose.pose.pose.orientation.z) + ',' + str(current_pose.pose.pose.orientation.w)+ '\n')
         rospy.loginfo('poses written to '+ output_file_path)
-
-    def send_feedback(self, feedback):
-        self._feedback.text = feedback
-        self._as.publish_feedback(self._feedback)
-
-    def send_result(self, result):
-        self._result.result = result
+        while not self._result_ready:
+            continue
         if result == WaypointsResult.RESET:
             self._as.set_aborted(self._result)
         elif result == WaypointsResult.CANCELED:
@@ -283,6 +280,14 @@ class FollowWaypointsAction():
             self._as.set_aborted(self._result)
         elif result == WaypointsResult.SUCCEEDED:
             self._as.set_succeeded(self._result)
+
+    def send_feedback(self, feedback):
+        self._feedback.text = feedback
+        self._as.publish_feedback(self._feedback)
+
+    def set_result(self, result):
+        self._result.result = result
+        self._result_ready = True
 
 def main():
     global fw
