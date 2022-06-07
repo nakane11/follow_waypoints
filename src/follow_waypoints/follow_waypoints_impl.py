@@ -61,7 +61,7 @@ class FollowPath(State):
         rospy.loginfo('Starting a tf listner.')
         self.tf = TransformListener()
         self.listener = tf.TransformListener()
-        self.distance_tolerance = rospy.get_param('waypoint_distance_tolerance', 0.0)
+        self.distance_tolerance = rospy.get_param('~waypoint_distance_tolerance', 0.0)
         self.timeout = rospy.get_param('~timeout', 0.0)
 
     def execute(self, userdata):
@@ -88,13 +88,16 @@ class FollowPath(State):
             # rospy.loginfo("To cancel the goal: 'rostopic pub -1 /move_base/cancel actionlib_msgs/GoalID -- {}'")
             self.client.send_goal(goal)
             if not self.distance_tolerance > 0.0:
+                rospy.loginfo('tolerance < 0.0')
                 if self.timeout > 0:
+                    rospy.loginfo('timeout > 0.0')
                     finished_within_time = self.client.wait_for_result(rospy.Duration(self.timeout))
                     if not finished_within_time:
                         self.client.cancel_all_goals()
                         fw.set_result(WaypointsResult.TIMEOUT)
                         return 'success'
                 else:
+                    rospy.loginfo('timeout < 0.0')
                     self.client.wait_for_result()
                 state = self.client.get_state()
                 if state == GoalStatus.ABORTED or state == GoalStatus.PREEMPTED:
@@ -112,7 +115,7 @@ class FollowPath(State):
                     timeout = self.timeout
                 else:
                     self.listener.waitForTransform(self.odom_frame_id, self.base_frame_id, start_time, rospy.Duration(4.0))
-                    trans,rot = self.listener.lookupTransform(self.odom_frame_id,self.base_frame_id, now)
+                    trans,rot = self.listener.lookupTransform(self.odom_frame_id,self.base_frame_id, start_time)
                     timeout = max(8.0, 5 * math.sqrt(pow(waypoint.pose.pose.position.x-trans[0],2)+pow(waypoint.pose.pose.position.y-trans[1],2)))
 
                 while(distance > self.distance_tolerance):
@@ -270,15 +273,15 @@ class FollowWaypointsAction():
         rospy.loginfo('poses written to '+ output_file_path)
         while not self._result_ready:
             continue
-        if result == WaypointsResult.RESET:
+        if self._result.result == WaypointsResult.RESET:
             self._as.set_aborted(self._result)
-        elif result == WaypointsResult.CANCELED:
+        elif self._result.result == WaypointsResult.CANCELED:
             self._as.set_preempted(self._result)
-        elif result == WaypointsResult.FAILED:
+        elif self._result.result == WaypointsResult.FAILED:
             self._as.set_aborted(self._result)
-        elif result == WaypointsResult.TIMEOUT:
+        elif self._result.result == WaypointsResult.TIMEOUT:
             self._as.set_aborted(self._result)
-        elif result == WaypointsResult.SUCCEEDED:
+        elif self._result.result == WaypointsResult.SUCCEEDED:
             self._as.set_succeeded(self._result)
 
     def send_feedback(self, feedback):
