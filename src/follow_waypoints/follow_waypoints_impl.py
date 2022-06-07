@@ -67,6 +67,7 @@ class FollowPath(State):
     def execute(self, userdata):
         global waypoints
         # Execute waypoints each in sequence
+        rospy.loginfo('waypoints:{}'.format(len(waypoints)))
         for i, waypoint in enumerate(waypoints):
             # Break if preempted
             if waypoints == []:
@@ -78,6 +79,7 @@ class FollowPath(State):
                 fw.set_result(WaypointsResult.CANCELED)
                 rospy.loginfo('Action Server received cancel request.')
                 return 'success'
+
             # Otherwise publish next waypoint as goal
             goal = MoveBaseGoal()
             goal.target_pose.header.frame_id = self.frame_id
@@ -88,16 +90,14 @@ class FollowPath(State):
             # rospy.loginfo("To cancel the goal: 'rostopic pub -1 /move_base/cancel actionlib_msgs/GoalID -- {}'")
             self.client.send_goal(goal)
             if not self.distance_tolerance > 0.0:
-                rospy.loginfo('tolerance < 0.0')
                 if self.timeout > 0:
-                    rospy.loginfo('timeout > 0.0')
+                    rospy.loginfo('timeout:{}'.format(self.timeout))
                     finished_within_time = self.client.wait_for_result(rospy.Duration(self.timeout))
                     if not finished_within_time:
                         self.client.cancel_all_goals()
                         fw.set_result(WaypointsResult.TIMEOUT)
                         return 'success'
                 else:
-                    rospy.loginfo('timeout < 0.0')
                     self.client.wait_for_result()
                 state = self.client.get_state()
                 if state == GoalStatus.ABORTED or state == GoalStatus.PREEMPTED:
@@ -112,11 +112,13 @@ class FollowPath(State):
                 start_time = rospy.Time.now()
 
                 if self.timeout > 0:
-                    timeout = self.timeout
+                    rospy.loginfo('timeout:{}'.format(self.timeout))
+                    timeout = rospy.Duration(secs=self.timeout)
                 else:
                     self.listener.waitForTransform(self.odom_frame_id, self.base_frame_id, start_time, rospy.Duration(4.0))
                     trans,rot = self.listener.lookupTransform(self.odom_frame_id,self.base_frame_id, start_time)
-                    timeout = max(8.0, 5 * math.sqrt(pow(waypoint.pose.pose.position.x-trans[0],2)+pow(waypoint.pose.pose.position.y-trans[1],2)))
+                    timeout = rospy.Duration(secs=max(8.0, 5 * math.sqrt(pow(waypoint.pose.pose.position.x-trans[0],2)+pow(waypoint.pose.pose.position.y-trans[1],2))))
+                    rospy.loginfo('timeout:{}'.format(self.timeout))
 
                 while(distance > self.distance_tolerance):
                     now = rospy.Time.now()
