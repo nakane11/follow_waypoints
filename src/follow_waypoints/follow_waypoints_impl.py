@@ -85,12 +85,32 @@ def changeOrientaion(i):
     if np.linalg.norm(v_ab) == 0.0:
         return
     matrix = np.eye(4)
-    matrix[:3, :3] = rotation_matrix_from_axis(v_ab, axes="xz")
+    matrix[:3, :3] = rotation_matrix_from_axis(v_ab, (0, 0, 1), axes="xz")
     q_xyzw = matrix2quaternion(matrix)
     waypoints[i].pose.pose.orientation.x = q_xyzw[0]
     waypoints[i].pose.pose.orientation.y = q_xyzw[1]
     waypoints[i].pose.pose.orientation.z = q_xyzw[2]
     waypoints[i].pose.pose.orientation.w = q_xyzw[3]
+
+
+def changeOrientaionModified(waypoints):
+    n = len(waypoints)
+    for i in range(n - 1):
+        pose_a = waypoints[i].pose.pose
+        pose_b = waypoints[i+1].pose.pose
+        pos_a = np.array([pose_a.position.x, pose_a.position.y, pose_a.position.z])
+        pos_b = np.array([pose_b.position.x, pose_b.position.y, pose_b.position.z])
+        v_ab = pos_b - pos_a
+        if np.linalg.norm(v_ab) == 0.0:
+            continue
+        matrix = np.eye(4)
+        matrix[:3, :3] = rotation_matrix_from_axis(v_ab, axes="xz")
+        q_xyzw = matrix2quaternion(matrix)
+        print(q_xyzw)
+        waypoints[i].pose.pose.orientation.x = q_xyzw[0]
+        waypoints[i].pose.pose.orientation.y = q_xyzw[1]
+        waypoints[i].pose.pose.orientation.z = q_xyzw[2]
+        waypoints[i].pose.pose.orientation.w = q_xyzw[3]
 
 #Path for saving and retreiving the pose.csv file 
 output_file_path = rospkg.RosPack().get_path('follow_waypoints')+"/saved_path/pose.csv"
@@ -298,16 +318,16 @@ class GetPath(State):
         rate = rospy.Rate(10)
         while (not self.path_ready and not self.start_journey_bool and not fw.path_ready):
             rate.sleep()
+        pose_sub.unregister()
         # Path is ready! return success and move on to the next state (FOLLOW_PATH)
         # rospy.sleep(1)
-        # pose_sub.unregister()
         return 'success'
 
     def callback(self, msg):
         global waypoints
         rospy.loginfo("Recieved new waypoint")
         waypoints.append(changePose(msg, self.frame_id))
-        # changeOrientaion(len(waypoints)-2)
+        changeOrientaion(len(waypoints)-2)
         # publish waypoint queue as pose array so that you can see them in rviz, etc.
         self.poseArray_publisher.publish(convert_PoseWithCovArray_to_PoseArray(waypoints))
 
