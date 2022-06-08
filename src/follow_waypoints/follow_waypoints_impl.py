@@ -69,6 +69,7 @@ class FollowPath(State):
         # Execute waypoints each in sequence
         rospy.loginfo('waypoints:{}'.format(len(waypoints)))
         for i, waypoint in enumerate(waypoints):
+            # print(waypoint)
             # Break if preempted
             if waypoints == []:
                 fw.set_result(WaypointsResult.RESET)
@@ -77,7 +78,7 @@ class FollowPath(State):
             elif fw._as.is_preempt_requested():
                 self.client.cancel_all_goals()
                 fw.set_result(WaypointsResult.CANCELED)
-                rospy.loginfo('Action Server received cancel request.')
+                rospy.loginfo('Waypoints action Server received cancel request.')
                 return 'success'
 
             # Otherwise publish next waypoint as goal
@@ -91,9 +92,10 @@ class FollowPath(State):
             self.client.send_goal(goal)
             if not self.distance_tolerance > 0.0:
                 if self.timeout > 0:
-                    rospy.loginfo('timeout:{}'.format(self.timeout))
+                    rospy.loginfo('Set timeout:{}'.format(self.timeout))
                     finished_within_time = self.client.wait_for_result(rospy.Duration(self.timeout))
                     if not finished_within_time:
+                        rospy.loginfo('Cancelled move_base because of timeout {}s'.format(self.timeout))
                         self.client.cancel_all_goals()
                         fw.set_result(WaypointsResult.TIMEOUT)
                         return 'success'
@@ -101,38 +103,44 @@ class FollowPath(State):
                     self.client.wait_for_result()
                 state = self.client.get_state()
                 if state == GoalStatus.ABORTED or state == GoalStatus.PREEMPTED:
+                    rospy.loginfo('Move_base failed because server received cancel request or goal was aborted')
                     fw.set_result(WaypointsResult.FAILED)
                     return 'success'
-                rospy.loginfo("Waiting for %f sec..." % self.duration)
-                time.sleep(self.duration)
-                fw.send_feedback("Passed {}/{} waypoint.".format(i+1, len(waypoints)))
+                if self.duration > 0.0:
+                    rospy.loginfo("Waiting for %f sec..." % self.duration)
+                    time.sleep(self.duration)
+                fw.send_feedback("Passed {}/{} waypoints.".format(i+1, len(waypoints)))
             else:
                 #This is the loop which exist when the robot is near a certain GOAL point.
                 distance = 10
                 start_time = rospy.Time.now()
-
                 if self.timeout > 0:
-                    rospy.loginfo('timeout:{}'.format(self.timeout))
+                    rospy.loginfo('Set timeout:{}'.format(self.timeout))
                     timeout = rospy.Duration(secs=self.timeout)
                 else:
-                    self.listener.waitForTransform(self.odom_frame_id, self.base_frame_id, start_time, rospy.Duration(4.0))
-                    trans,rot = self.listener.lookupTransform(self.odom_frame_id,self.base_frame_id, start_time)
-                    timeout = rospy.Duration(secs=max(8.0, 5 * math.sqrt(pow(waypoint.pose.pose.position.x-trans[0],2)+pow(waypoint.pose.pose.position.y-trans[1],2))))
-                    rospy.loginfo('timeout:{}'.format(self.timeout))
+                    self.listener.waitForTransform(self.frame_id, self.base_frame_id, start_time, rospy.Duration(4.0))
+                    trans,rot = self.listener.lookupTransform(self.frame_id, self.base_frame_id, start_time)
+                    calculated_timeout = max(8.0, 8 * math.sqrt(pow(waypoint.pose.pose.position.x-trans[0],2)+pow(waypoint.pose.pose.position.y-trans[1],2)))
+                    rospy.loginfo('Set timeout:{}'.format(calculated_timeout))
+                    timeout = rospy.Duration(secs=calculated_timeout)
 
                 while(distance > self.distance_tolerance):
                     now = rospy.Time.now()
-                    self.listener.waitForTransform(self.odom_frame_id, self.base_frame_id, now, rospy.Duration(4.0))
-                    trans,rot = self.listener.lookupTransform(self.odom_frame_id,self.base_frame_id, now)
+                    self.listener.waitForTransform(self.frame_id, self.base_frame_id, start_time, rospy.Duration(4.0))
+                    trans,rot = self.listener.lookupTransform(self.frame_id, self.base_frame_id, start_time)
                     distance = math.sqrt(pow(waypoint.pose.pose.position.x-trans[0],2)+pow(waypoint.pose.pose.position.y-trans[1],2))
                     state = self.client.get_state()
                     if state == GoalStatus.ABORTED or state == GoalStatus.PREEMPTED:
+                        rospy.loginfo('Move_base failed because server received cancel request or goal was aborted')
                         fw.set_result(WaypointsResult.FAILED)
                         return 'success'
                     elif (now - start_time) > timeout:
+                        rospy.loginfo('Cancelled move_base because of timeout {}s'.format(self.timeout))
+                        self.client.cancel_all_goals()
                         fw.set_result(WaypointsResult.TIMEOUT)
                         return 'success'
                     fw.send_feedback("[{}/{}] {}m to next waypoint.".format(i+1, len(waypoints), distance))
+        rospy.loginfo('Reached final waypoint')
         fw.set_result(WaypointsResult.SUCCEEDED)
         return 'success'
 
@@ -147,6 +155,7 @@ class GetPath(State):
     global fw
     def __init__(self):
         State.__init__(self, outcomes=['success'], input_keys=['waypoints'], output_keys=['waypoints'])
+        self.frame_id = rospy.get_param('~goal_frame_id','map')
         # Subscribe to pose message to get new waypoints
         self.addpose_topic = rospy.get_param('~addpose_topic','/initialpose')
         # Create publsher to publish waypoints as pose array so that you can see them in rviz, etc.
@@ -157,14 +166,17 @@ class GetPath(State):
         def wait_for_path_reset():
             """thread worker function"""
             global waypoints
+            rate = rospy.Rate(10)
             while not rospy.is_shutdown():
                 data = rospy.wait_for_message('/path_reset', Empty)
                 rospy.loginfo('Recieved path RESET message')
                 self.initialize_path_queue()
-                rospy.sleep(3) # Wait 3 seconds because `rostopic echo` latches
+                rate.sleep()
+                # rospy.sleep(3) # Wait 3 seconds because `rostopic echo` latches
                                # for three seconds and wait_for_message() in a
                                # loop will see it again.
         reset_thread = threading.Thread(target=wait_for_path_reset)
+        reset_thread.daemon = True  # terminate when main thread exit
         reset_thread.start()
 
     def initialize_path_queue(self):
@@ -189,8 +201,9 @@ class GetPath(State):
             with open(output_file_path, 'w') as file:
                 for current_pose in waypoints:
                     file.write(str(current_pose.pose.pose.position.x) + ',' + str(current_pose.pose.pose.position.y) + ',' + str(current_pose.pose.pose.position.z) + ',' + str(current_pose.pose.pose.orientation.x) + ',' + str(current_pose.pose.pose.orientation.y) + ',' + str(current_pose.pose.pose.orientation.z) + ',' + str(current_pose.pose.pose.orientation.w)+ '\n')
-            rospy.loginfo('poses written to '+ output_file_path)	
+            rospy.loginfo('poses written to '+ output_file_path)
         ready_thread = threading.Thread(target=wait_for_path_ready)
+        ready_thread.daemon = True  # terminate when main thread exit
         ready_thread.start()
 
         self.start_journey_bool = False
@@ -217,33 +230,48 @@ class GetPath(State):
                     self.poseArray_publisher.publish(convert_PoseWithCovArray_to_PoseArray(waypoints))
             self.start_journey_bool = True
             
-            
         start_journey_thread = threading.Thread(target=wait_for_start_journey)
+        start_journey_thread.daemon = True  # terminate when main thread exit
         start_journey_thread.start()
 
         topic = self.addpose_topic;
         rospy.loginfo("Waiting to recieve waypoints via Pose msg on topic %s" % topic)
         rospy.loginfo("To start following waypoints: 'rostopic pub /path_ready std_msgs/Empty -1'")
+        rospy.loginfo("or 'rostopic pub %s/goal follow_waypoints/WaipointsGoal -1'" % rospy.get_param('~action_name','waypoints_action'))
         rospy.loginfo("OR")
         rospy.loginfo("To start following saved waypoints: 'rostopic pub /start_journey std_msgs/Empty -1'")
 
-
-        # Wait for published waypoints or saved path  loaded
+        # Wait for published waypoints or saved path loaded
+        pose_sub = rospy.Subscriber(topic, PoseWithCovarianceStamped,
+                                    callback=self.callback, queue_size=1000)
+        rate = rospy.Rate(10)
         while (not self.path_ready and not self.start_journey_bool and not fw.path_ready):
-            try:
-                pose = rospy.wait_for_message(topic, PoseWithCovarianceStamped, timeout=1)
-            except rospy.ROSException as e:
-                if 'timeout exceeded' in e.message:
-                    continue  # no new waypoint within timeout, looping...
-                else:
-                    raise e
-            rospy.loginfo("Recieved new waypoint")
-            waypoints.append(changePose(pose, "map"))
-            # publish waypoint queue as pose array so that you can see them in rviz, etc.
-            self.poseArray_publisher.publish(convert_PoseWithCovArray_to_PoseArray(waypoints))
-
+            rate.sleep()
         # Path is ready! return success and move on to the next state (FOLLOW_PATH)
+        # rospy.sleep(1)
+        # pose_sub.unregister()
         return 'success'
+
+    def callback(self, msg):
+        global waypoints
+        rospy.loginfo("Recieved new waypoint")
+        waypoints.append(changePose(msg, self.frame_id))
+        # publish waypoint queue as pose array so that you can see them in rviz, etc.
+        self.poseArray_publisher.publish(convert_PoseWithCovArray_to_PoseArray(waypoints))
+
+    # def publish_waypoints(self):
+    #     global waypoints
+    #     rate = rospy.Rate(10)
+    #     num = len(waypoints)
+    #     while not rospy.is_shutdown():
+    #         if num < len(waypoints):
+    #             self.poseArray_publisher.publish(convert_PoseWithCovArray_to_PoseArray(waypoints))
+    #             num = len(waypoints)
+    #         rate.sleep()
+
+    # publish_thread = threading.Thread(target=publish_waypoints)
+    # publish_thread.daemon = True  # terminate when main thread exit
+    # publish_thread.start()
 
 class PathComplete(State):
     def __init__(self):
@@ -273,6 +301,7 @@ class FollowWaypointsAction():
             for current_pose in waypoints:
                 file.write(str(current_pose.pose.pose.position.x) + ',' + str(current_pose.pose.pose.position.y) + ',' + str(current_pose.pose.pose.position.z) + ',' + str(current_pose.pose.pose.orientation.x) + ',' + str(current_pose.pose.pose.orientation.y) + ',' + str(current_pose.pose.pose.orientation.z) + ',' + str(current_pose.pose.pose.orientation.w)+ '\n')
         rospy.loginfo('poses written to '+ output_file_path)
+
         while not self._result_ready:
             continue
         if self._result.result == WaypointsResult.RESET:
