@@ -11,12 +11,45 @@ from std_msgs.msg import Empty
 from tf import TransformListener
 import tf
 import math
+import numpy as np
 import rospkg
 import csv
 import time
 from geometry_msgs.msg import PoseStamped
 import follow_waypoints.msg
 from follow_waypoints.msg import WaypointsAction, WaypointsResult, WaypointsFeedback
+
+from tf.transformations import quaternion_from_matrix as matrix2quaternion
+from tf.transformations import unit_vector as normalize_vector
+
+
+def outer_product_matrix(v):
+    return np.array([[0, -v[2], v[1]],
+                     [v[2], 0, -v[0]],
+                     [-v[1], v[0], 0]])
+
+
+def cross_product(a, b):
+    return np.dot(outer_product_matrix(a), b)
+
+
+def rotation_matrix_from_axis(
+        first_axis=(1, 0, 0), second_axis=(0, 1, 0), axes='xy'):
+    if axes not in ['xy', 'yx', 'xz', 'zx', 'yz', 'zy']:
+        raise ValueError("Valid axes are 'xy', 'yx', 'xz', 'zx', 'yz', 'zy'.")
+    e1 = normalize_vector(first_axis)
+    e2 = normalize_vector(second_axis - np.dot(second_axis, e1) * e1)
+    if axes in ['xy', 'zx', 'yz']:
+        third_axis = cross_product(e1, e2)
+    else:
+        third_axis = cross_product(e2, e1)
+    e3 = normalize_vector(
+        third_axis - np.dot(third_axis, e1) * e1 - np.dot(third_axis, e2) * e2)
+    first_index = ord(axes[0]) - ord('x')
+    second_index = ord(axes[1]) - ord('x')
+    third_index = ((first_index + 1) ^ (second_index + 1)) - 1
+    indices = [first_index, second_index, third_index]
+    return np.vstack([e1, e2, e3])[np.argsort(indices)].T
 
 # change Pose to the correct frame 
 def changePose(waypoint,target_frame):
@@ -40,6 +73,24 @@ def changePose(waypoint,target_frame):
         rospy.loginfo("CAN'T TRANSFORM POSE TO {} FRAME".format(target_frame))
         exit()
 
+def changeOrientaion(i):
+    global waypoints
+    if i == len(waypoints)-1:
+        return
+    pose_a = waypoints[i].pose.pose
+    pose_b = waypoints[i+1].pose.pose
+    pos_a = np.array([pose_a.position.x, pose_a.position.y, pose_a.position.z])
+    pos_b = np.array([pose_b.position.x, pose_b.position.y, pose_b.position.z])
+    v_ab = pos_b - pos_a
+    if np.linalg.norm(v_ab) == 0.0:
+        return
+    matrix = np.eye(4)
+    matrix[:3, :3] = rotation_matrix_from_axis(v_ab, axes="xz")
+    q_xyzw = matrix2quaternion(matrix)
+    waypoints[i].pose.pose.orientation.x = q_xyzw[0]
+    waypoints[i].pose.pose.orientation.y = q_xyzw[1]
+    waypoints[i].pose.pose.orientation.z = q_xyzw[2]
+    waypoints[i].pose.pose.orientation.w = q_xyzw[3]
 
 #Path for saving and retreiving the pose.csv file 
 output_file_path = rospkg.RosPack().get_path('follow_waypoints')+"/saved_path/pose.csv"
@@ -120,7 +171,7 @@ class FollowPath(State):
                 else:
                     self.listener.waitForTransform(self.frame_id, self.base_frame_id, start_time, rospy.Duration(4.0))
                     trans,rot = self.listener.lookupTransform(self.frame_id, self.base_frame_id, start_time)
-                    calculated_timeout = max(8.0, 8 * math.sqrt(pow(waypoint.pose.pose.position.x-trans[0],2)+pow(waypoint.pose.pose.position.y-trans[1],2)))
+                    calculated_timeout = max(10.0, 10 * math.sqrt(pow(waypoint.pose.pose.position.x-trans[0],2)+pow(waypoint.pose.pose.position.y-trans[1],2)))
                     rospy.loginfo('Set timeout:{}'.format(calculated_timeout))
                     timeout = rospy.Duration(secs=calculated_timeout)
 
@@ -135,7 +186,7 @@ class FollowPath(State):
                         fw.set_result(WaypointsResult.FAILED)
                         return 'success'
                     elif (now - start_time) > timeout:
-                        rospy.loginfo('Cancelled move_base because of timeout {}s'.format(self.timeout))
+                        rospy.loginfo('Cancelled move_base because of timeout {}s'.format(timeout))
                         self.client.cancel_all_goals()
                         fw.set_result(WaypointsResult.TIMEOUT)
                         return 'success'
@@ -236,10 +287,10 @@ class GetPath(State):
 
         topic = self.addpose_topic;
         rospy.loginfo("Waiting to recieve waypoints via Pose msg on topic %s" % topic)
-        rospy.loginfo("To start following waypoints: 'rostopic pub /path_ready std_msgs/Empty -1'")
-        rospy.loginfo("or 'rostopic pub %s/goal follow_waypoints/WaipointsGoal -1'" % rospy.get_param('~action_name','waypoints_action'))
-        rospy.loginfo("OR")
-        rospy.loginfo("To start following saved waypoints: 'rostopic pub /start_journey std_msgs/Empty -1'")
+        # rospy.loginfo("To start following waypoints: 'rostopic pub /path_ready std_msgs/Empty -1'")
+        # rospy.loginfo("or 'rostopic pub %s/goal follow_waypoints/WaipointsGoal -1'" % rospy.get_param('~action_name','waypoints_action'))
+        # rospy.loginfo("OR")
+        # rospy.loginfo("To start following saved waypoints: 'rostopic pub /start_journey std_msgs/Empty -1'")
 
         # Wait for published waypoints or saved path loaded
         pose_sub = rospy.Subscriber(topic, PoseWithCovarianceStamped,
@@ -256,6 +307,7 @@ class GetPath(State):
         global waypoints
         rospy.loginfo("Recieved new waypoint")
         waypoints.append(changePose(msg, self.frame_id))
+        # changeOrientaion(len(waypoints)-2)
         # publish waypoint queue as pose array so that you can see them in rviz, etc.
         self.poseArray_publisher.publish(convert_PoseWithCovArray_to_PoseArray(waypoints))
 
