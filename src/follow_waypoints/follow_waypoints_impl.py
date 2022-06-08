@@ -198,7 +198,7 @@ class FollowPath(State):
                 while(distance > self.distance_tolerance):
                     now = rospy.Time.now()
                     self.listener.waitForTransform(self.frame_id, self.base_frame_id, now, rospy.Duration(4.0))
-                    trans,rot = self.listener.lookupTransform(self.frame_id, self.base_frame_id, start_time)
+                    trans,rot = self.listener.lookupTransform(self.frame_id, self.base_frame_id, now)
                     distance = math.sqrt(pow(waypoint.pose.pose.position.x-trans[0],2)+pow(waypoint.pose.pose.position.y-trans[1],2))
                     state = self.client.get_state()
                     if state == GoalStatus.ABORTED or state == GoalStatus.PREEMPTED:
