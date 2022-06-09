@@ -137,6 +137,7 @@ class FollowPath(State):
 
     def execute(self, userdata):
         global waypoints
+        self.max_retry = rospy.get_param("~max_retry", 10)
         # Execute waypoints each in sequence
         rospy.loginfo('waypoints:{}'.format(len(waypoints)))
         for i, waypoint in enumerate(waypoints):
@@ -161,6 +162,7 @@ class FollowPath(State):
                     (waypoint.pose.pose.position.x, waypoint.pose.pose.position.y))
             # rospy.loginfo("To cancel the goal: 'rostopic pub -1 /move_base/cancel actionlib_msgs/GoalID -- {}'")
             self.client.send_goal(goal)
+            retry_count = 0
             if not self.distance_tolerance > 0.0:
                 if self.timeout > 0:
                     rospy.loginfo('Set timeout:{}'.format(self.timeout))
@@ -174,7 +176,7 @@ class FollowPath(State):
                     self.client.wait_for_result()
                 state = self.client.get_state()
                 if state == GoalStatus.ABORTED or state == GoalStatus.PREEMPTED:
-                    rospy.loginfo('Move_base failed because server received cancel request or goal was aborted')
+                    rospy.logwarn('Move_base failed because server received cancel request or goal was aborted')
                     fw.set_result(WaypointsResult.FAILED)
                     return 'success'
                 if self.duration > 0.0:
@@ -202,8 +204,15 @@ class FollowPath(State):
                     distance = math.sqrt(pow(waypoint.pose.pose.position.x-trans[0],2)+pow(waypoint.pose.pose.position.y-trans[1],2))
                     state = self.client.get_state()
                     if state == GoalStatus.ABORTED or state == GoalStatus.PREEMPTED:
-                        rospy.loginfo('Move_base failed because server received cancel request or goal was aborted')
+                        rospy.logwarn('Move_base failed because server received cancel request or goal was aborted')
+                        if retry_count < self.max_retry:
+                            rospy.logwarn('Retry send goals')
+                            self.client.send_goal(goal)
+                            retry_count += 1
+                            continue
+                        rospy.logwarn("Finally Move_base failed because server received cancel request or goal was aborted")
                         fw.set_result(WaypointsResult.FAILED)
+                        # self.client.send_goal(goal)
                         return 'success'
                     elif (now - start_time) > timeout:
                         rospy.loginfo('Cancelled move_base because of timeout {}s'.format(timeout))
