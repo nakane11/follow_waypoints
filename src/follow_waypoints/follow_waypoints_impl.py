@@ -141,16 +141,10 @@ class FollowPath(State):
         # Execute waypoints each in sequence
         rospy.loginfo('waypoints:{}'.format(len(waypoints)))
         for i, waypoint in enumerate(waypoints):
-            # print(waypoint)
             # Break if preempted
             if waypoints == []:
                 fw.set_result(WaypointsResult.RESET)
                 rospy.loginfo('The waypoint queue has been reset.')
-                return 'success'
-            elif fw._as.is_preempt_requested():
-                self.client.cancel_all_goals()
-                fw.set_result(WaypointsResult.CANCELED)
-                rospy.loginfo('Waypoints action Server received cancel request.')
                 return 'success'
 
             # Otherwise publish next waypoint as goal
@@ -164,6 +158,12 @@ class FollowPath(State):
             self.client.send_goal(goal)
             retry_count = 0
             if not self.distance_tolerance > 0.0:
+                if fw._as.is_preempt_requested():
+                    self.client.cancel_all_goals()
+                    fw.set_result(WaypointsResult.CANCELED)
+                    rospy.loginfo('Waypoints action Server received cancel request.')
+                    return 'success'
+
                 if self.timeout > 0:
                     rospy.loginfo('Set timeout:{}'.format(self.timeout))
                     finished_within_time = self.client.wait_for_result(rospy.Duration(self.timeout))
@@ -182,7 +182,7 @@ class FollowPath(State):
                 if self.duration > 0.0:
                     rospy.loginfo("Waiting for %f sec..." % self.duration)
                     time.sleep(self.duration)
-                fw.send_feedback("Passed {}/{} waypoints.".format(i+1, len(waypoints)))
+                fw.send_feedback(i+1, "Passed {}/{} waypoints.".format(i+1, len(waypoints)))
             else:
                 #This is the loop which exist when the robot is near a certain GOAL point.
                 distance = 10
@@ -202,6 +202,12 @@ class FollowPath(State):
                     self.listener.waitForTransform(self.frame_id, self.base_frame_id, now, rospy.Duration(4.0))
                     trans,rot = self.listener.lookupTransform(self.frame_id, self.base_frame_id, now)
                     distance = math.sqrt(pow(waypoint.pose.pose.position.x-trans[0],2)+pow(waypoint.pose.pose.position.y-trans[1],2))
+                    if fw._as.is_preempt_requested():
+                        self.client.cancel_all_goals()
+                        fw.set_result(WaypointsResult.CANCELED)
+                        rospy.loginfo('Waypoints action Server received cancel request.')
+                        return 'success'
+
                     state = self.client.get_state()
                     if state == GoalStatus.ABORTED or state == GoalStatus.PREEMPTED:
                         rospy.logwarn('Move_base failed because server received cancel request or goal was aborted')
@@ -219,7 +225,7 @@ class FollowPath(State):
                         self.client.cancel_all_goals()
                         fw.set_result(WaypointsResult.TIMEOUT)
                         return 'success'
-                    fw.send_feedback("[{}/{}] {}m to next waypoint.".format(i+1, len(waypoints), distance))
+                    fw.send_feedback(i+1, "[{}/{}] {}m to next waypoint.".format(i+1, len(waypoints), distance))
         rospy.loginfo('Reached final waypoint')
         fw.set_result(WaypointsResult.SUCCEEDED)
         return 'success'
@@ -340,20 +346,6 @@ class GetPath(State):
         # publish waypoint queue as pose array so that you can see them in rviz, etc.
         self.poseArray_publisher.publish(convert_PoseWithCovArray_to_PoseArray(waypoints))
 
-    # def publish_waypoints(self):
-    #     global waypoints
-    #     rate = rospy.Rate(10)
-    #     num = len(waypoints)
-    #     while not rospy.is_shutdown():
-    #         if num < len(waypoints):
-    #             self.poseArray_publisher.publish(convert_PoseWithCovArray_to_PoseArray(waypoints))
-    #             num = len(waypoints)
-    #         rate.sleep()
-
-    # publish_thread = threading.Thread(target=publish_waypoints)
-    # publish_thread.daemon = True  # terminate when main thread exit
-    # publish_thread.start()
-
 class PathComplete(State):
     def __init__(self):
         State.__init__(self, outcomes=['success'])
@@ -396,7 +388,8 @@ class FollowWaypointsAction():
         elif self._result.result == WaypointsResult.SUCCEEDED:
             self._as.set_succeeded(self._result)
 
-    def send_feedback(self, feedback):
+    def send_feedback(self, current_point, feedback):
+        self._feedback.current_point = current_point
         self._feedback.text = feedback
         self._as.publish_feedback(self._feedback)
 
